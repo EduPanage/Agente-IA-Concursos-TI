@@ -14,6 +14,7 @@ def main():
     print("-" * 50)
 
     print(f"Status: {result['status']}")
+    print(f"Motivo: {result.get('reason', 'Não informado')}")
     print(f"Resolução: {result['resolution_status']}")
     print(f"URL original: {result['source_url']}")
     print(f"Editais encontrados: {len(result['pdf_links'])}")
