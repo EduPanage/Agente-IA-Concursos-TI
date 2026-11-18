@@ -46,7 +46,81 @@ def initialize_database():
     print("Banco de dados inicializado com sucesso!")
 
 
+
 def save_news(news_list):
+    """Armazena notícias e identifica as inéditas."""
+
+    inserted = 0
+    updated = 0
+    new_news = []
+
+    current_time = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    with get_connection() as connection:
+
+        for news in news_list:
+
+            link = news.get("link")
+
+            if not link:
+                continue
+
+            existing = connection.execute("""
+                SELECT id FROM noticias
+                WHERE link = ?
+            """, (link,)).fetchone()
+
+            if existing:
+
+                connection.execute("""
+                    UPDATE noticias
+                    SET last_seen = ?,
+                        title = ?,
+                        summary = ?,
+                        location = ?
+                    WHERE link = ?
+                """, (
+                    current_time,
+                    news.get("title", ""),
+                    news.get("summary", ""),
+                    news.get("location", ""),
+                    link
+                ))
+
+                updated += 1
+
+            else:
+
+                connection.execute("""
+                    INSERT INTO noticias (
+                        title, link, published, summary,
+                        source, location, search_query,
+                        first_seen, last_seen
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    news.get("title", ""),
+                    link,
+                    news.get("published", ""),
+                    news.get("summary", ""),
+                    news.get("source", ""),
+                    news.get("location", ""),
+                    news.get("search_query", ""),
+                    current_time,
+                    current_time
+                ))
+
+                inserted += 1
+                new_news.append(news)
+
+    return {
+        "inserted": inserted,
+        "updated": updated,
+        "new_news": new_news
+    }
+
     """Armazena notícias e atualiza aquelas já existentes."""
 
     inserted = 0
