@@ -5,14 +5,12 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 
-# Caminho do banco de dados
 BASE_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "concursos.db"
 
 
 def get_connection():
-    """Cria e retorna uma conexão com o SQLite."""
 
     DATA_DIR.mkdir(exist_ok=True)
 
@@ -23,7 +21,6 @@ def get_connection():
 
 
 def initialize_database():
-    """Cria as tabelas necessárias para o agente."""
 
     with get_connection() as connection:
 
@@ -39,16 +36,48 @@ def initialize_database():
                 search_query TEXT,
                 first_seen TEXT NOT NULL,
                 last_seen TEXT NOT NULL,
-                notified_at TEXT
+                notified_at TEXT,
+                is_public_competition INTEGER,
+                has_it_opportunity INTEGER,
+                relevance TEXT,
+                event_type TEXT,
+                classification_reason TEXT,
+                evidence TEXT,
+                analysis_status TEXT DEFAULT 'pending'
             )
         """)
+
+        # Migração para bancos já existentes
+        existing_columns = {
+            column["name"]
+            for column in connection.execute(
+                "PRAGMA table_info(noticias)"
+            ).fetchall()
+        }
+
+        new_columns = {
+            "is_public_competition": "INTEGER",
+            "has_it_opportunity": "INTEGER",
+            "relevance": "TEXT",
+            "event_type": "TEXT",
+            "classification_reason": "TEXT",
+            "evidence": "TEXT",
+            "analysis_status": "TEXT DEFAULT 'pending'"
+        }
+
+        for column, definition in new_columns.items():
+
+            if column not in existing_columns:
+
+                connection.execute(
+                    f"ALTER TABLE noticias ADD COLUMN "
+                    f"{column} {definition}"
+                )
 
     print("Banco de dados inicializado com sucesso!")
 
 
-
 def save_news(news_list):
-    """Armazena notícias e identifica as inéditas."""
 
     inserted = 0
     updated = 0
@@ -97,9 +126,10 @@ def save_news(news_list):
                     INSERT INTO noticias (
                         title, link, published, summary,
                         source, location, search_query,
-                        first_seen, last_seen
+                        first_seen, last_seen,
+                        analysis_status
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     news.get("title", ""),
                     link,
@@ -109,7 +139,8 @@ def save_news(news_list):
                     news.get("location", ""),
                     news.get("search_query", ""),
                     current_time,
-                    current_time
+                    current_time,
+                    "pending"
                 ))
 
                 inserted += 1
@@ -121,116 +152,84 @@ def save_news(news_list):
         "new_news": new_news
     }
 
-    """Armazena notícias e atualiza aquelas já existentes."""
 
-    inserted = 0
-    updated = 0
-
-    current_time = datetime.now(
-        timezone.utc
-    ).isoformat()
+def get_pending_analysis(limit=20):
 
     with get_connection() as connection:
 
-        for news in news_list:
+        cursor = connection.execute("""
+            SELECT *
+            FROM noticias
+            WHERE analysis_status = 'pending'
+            ORDER BY published DESC
+            LIMIT ?
+        """, (limit,))
 
-            link = news.get("link")
+        return cursor.fetchall()
 
-            if not link:
-                continue
 
-            cursor = connection.execute("""
-                SELECT id FROM noticias
-                WHERE link = ?
-            """, (link,))
 
-            existing = cursor.fetchone()
+def update_classification(news_id, result):
 
-            if existing:
+    with get_connection() as connection:
 
-                connection.execute("""
-                    UPDATE noticias
-                    SET last_seen = ?,
-                        title = ?,
-                        summary = ?,
-                        location = ?
-                    WHERE link = ?
-                """, (
-                    current_time,
-                    news.get("title", ""),
-                    news.get("summary", ""),
-                    news.get("location", ""),
-                    link
-                ))
+        connection.execute("""
+            UPDATE noticias
+            SET is_public_competition = ?,
+                has_it_opportunity = ?,
+                location = ?,
+                relevance = ?,
+                event_type = ?,
+                classification_reason = ?,
+                evidence = ?,
+                analysis_status = ?
+            WHERE id = ?
+        """, (
+            int(result["is_public_competition"]),
+            int(result["has_it_opportunity"]),
+            result["location"],
+            result["relevance"],
+            result["event_type"],
+            result["reason"],
+            result["evidence"],
+            "completed",
+            news_id
+        ))
 
-                updated += 1
-
-            else:
-
-                connection.execute("""
-                    INSERT INTO noticias (
-                        title,
-                        link,
-                        published,
-                        summary,
-                        source,
-                        location,
-                        search_query,
-                        first_seen,
-                        last_seen
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    news.get("title", ""),
-                    link,
-                    news.get("published", ""),
-                    news.get("summary", ""),
-                    news.get("source", ""),
-                    news.get("location", ""),
-                    news.get("search_query", ""),
-                    current_time,
-                    current_time
-                ))
-
-                inserted += 1
-
-    return {
-        "inserted": inserted,
-        "updated": updated
-    }
 
 
 def get_all_news():
-    """Retorna todas as notícias armazenadas."""
 
     with get_connection() as connection:
 
-        cursor = connection.execute("""
+        return connection.execute("""
             SELECT *
             FROM noticias
             ORDER BY published DESC
-        """)
-
-        return cursor.fetchall()
+        """).fetchall()
 
 
 def get_unnotified_news():
-    """Retorna notícias que ainda não foram notificadas."""
 
     with get_connection() as connection:
 
-        cursor = connection.execute("""
+        return connection.execute("""
             SELECT *
             FROM noticias
             WHERE notified_at IS NULL
+              AND analysis_status = 'completed'
+              AND is_public_competition = 1
+              AND has_it_opportunity = 1
+              AND relevance IN (
+                  'confirmed_dourados',
+                  'confirmed_ms',
+                  'national_unknown'
+              )
             ORDER BY published DESC
-        """)
-
-        return cursor.fetchall()
+        """).fetchall()
 
 
 def mark_as_notified(news_id):
-    """Registra que uma notícia foi notificada."""
 
     current_time = datetime.now(
         timezone.utc

@@ -1,9 +1,11 @@
 
 import feedparser
 import requests
+import time
 
 from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 
 
 class RSSCollector:
@@ -11,123 +13,71 @@ class RSSCollector:
     def __init__(self):
 
         self.days_limit = 3
+        self.request_interval = 2
+        self.max_retries = 3
 
-        # Pesquisas municipais, estaduais e nacionais
         self.queries = [
             # Dourados
+            "concurso público Dourados MS",
             "concurso TI Dourados MS",
-            "concurso técnico informática Dourados",
-            "concurso analista sistemas Dourados",
-            "processo seletivo TI Dourados",
 
             # Mato Grosso do Sul
-            "concurso TI Mato Grosso do Sul",
-            "concurso analista sistemas MS",
-            "concurso técnico informática MS",
+            "concurso público Mato Grosso do Sul",
+            "concurso tecnologia informação MS",
 
-            # Concursos federais e nacionais
-            "concurso federal tecnologia informação",
-            "concurso nacional analista TI",
+            # Concursos federais
+            "concurso público federal tecnologia informação",
             "concurso federal analista sistemas",
-            "concurso tribunal TI",
-            "concurso universidade federal TI",
-            "concurso instituto federal informática",
+            "concurso federal técnico informática",
 
-            # Possíveis vagas em MS
-            "concurso federal TI vagas MS",
-            "concurso nacional TI Dourados",
-            "concurso órgão federal TI Mato Grosso do Sul"
+            # Concursos nacionais
+            "concurso nacional tecnologia informação",
+            "concurso tribunal analista TI",
+            "concurso universidade federal tecnologia informação",
+
+            # Avanços e atualizações
+            "concurso público banca definida TI",
+            "concurso público autorizado tecnologia informação"
         ]
 
-        # Palavras relacionadas à área de TI
-        self.ti_keywords = [
-            "tecnologia da informação",
-            "tecnologia de informação",
-            "analista de ti",
-            "analista de sistemas",
-            "técnico de informática",
-            "tecnico em informatica",
-            "desenvolvedor",
-            "programador",
-            "administrador de redes",
-            "infraestrutura de ti",
-            "segurança da informação",
-            "banco de dados",
-            "suporte técnico",
-            "suporte de ti",
-            "sistemas de informação",
-            "ciência da computação",
-            "engenharia de software",
-            "analista de infraestrutura",
-            "engenheiro de software",
-            "redes de computadores"
-        ]
-
-        # Indícios de concurso ou contratação pública
         self.publication_keywords = [
-            "concurso público",
-            "concurso publico",
+            "concurso",
             "processo seletivo",
-            "edital",
-            "vagas",
-            "cargo público",
-            "cargo publico",
-            "servidor público",
-            "servidor publico",
+            "certame",
             "banca organizadora",
-            "comissão organizadora",
-            "comissao organizadora",
             "concurso autorizado",
-            "concurso previsto",
+            "comissão organizadora",
+            "edital de abertura",
+            "edital de concurso",
             "nomeação",
             "nomeacao",
             "convocação",
             "convocacao",
-            "inscrições",
-            "inscricoes",
-            "seleção pública",
-            "selecao publica"
+            "banca definida"
         ]
 
-        # Indícios de oportunidades nacionais
-        self.national_keywords = [
-            "federal",
-            "nacional",
-            "órgão federal",
-            "orgao federal",
-            "universidade federal",
-            "instituto federal",
-            "tribunal regional",
-            "tribunal superior"
-        ]
+        self.stats = {}
 
-        # Localidades de outros estados
-        self.other_state_keywords = [
-            "são paulo", "sao paulo", "ifsp",
-            "rio de janeiro", "if rj",
-            "paraná", "parana", "ifpr",
-            "minas gerais", "ifmg",
-            "santa catarina", "ifsc",
-            "rio grande do sul", "ifrs",
-            "goiás", "goias", "ifg",
-            "bahia", "ifba",
-            "pernambuco", "ifpe",
-            "ceará", "ceara", "ifce",
-            "espírito santo", "espirito santo", "ifes",
-            "amazonas", "ifam",
-            "mato grosso", "ifmt",
-            "rondônia", "rondonia", "ifro",
-            "acre", "ifac",
-            "roraima", "ifrr",
-            "amapá", "amapa", "ifap",
-            "tocantins", "ifto",
-            "sergipe", "ifs",
-            "alagoas", "ifal",
-            "paraíba", "paraiba", "ifpb",
-            "rio grande do norte", "ifrn",
-            "maranhão", "maranhao", "ifma",
-            "piauí", "piaui", "ifpi"
-        ]
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0"
+        })
+
+        self.reset_stats()
+
+    def reset_stats(self):
+
+        self.stats = {
+            "queries": 0,
+            "errors": 0,
+            "raw": 0,
+            "missing_date": 0,
+            "outside_period": 0,
+            "no_publication": 0,
+            "candidates": 0,
+            "duplicates": 0,
+            "final": 0
+        }
 
     def contains_keyword(self, text, keywords):
 
@@ -162,35 +112,92 @@ class RSSCollector:
         ]):
             return "Mato Grosso do Sul"
 
-        if self.contains_keyword(
-            text, self.other_state_keywords
-        ):
-            return "Outro estado"
-
-        if self.contains_keyword(
-            text, self.national_keywords
-        ):
+        if any(term in text for term in [
+            "federal",
+            "nacional",
+            "universidade federal",
+            "instituto federal",
+            "tribunal superior",
+            "tribunal regional"
+        ]):
             return "Nacional - lotação a confirmar"
 
-        return "Localidade não identificada"
+        return "Localidade a verificar"
 
-    def is_relevant(self, text):
+    def is_candidate(self, text):
 
-        # Precisa mencionar uma área de TI
-        if not self.contains_keyword(
-            text, self.ti_keywords
-        ):
-            return False
+        return self.contains_keyword(
+            text,
+            self.publication_keywords
+        )
 
-        # Precisa apresentar indícios de contratação pública
-        if not self.contains_keyword(
-            text, self.publication_keywords
-        ):
-            return False
+    def get_feed(self, url):
 
-        return True
+        for attempt in range(self.max_retries + 1):
+
+            try:
+
+                response = self.session.get(
+                    url,
+                    timeout=30
+                )
+
+                response.raise_for_status()
+
+                return feedparser.parse(response.content)
+
+            except requests.HTTPError as error:
+
+                status = error.response.status_code
+
+                if status == 429 or status >= 500:
+
+                    if attempt == self.max_retries:
+                        raise
+
+                    retry_after = error.response.headers.get(
+                        "Retry-After"
+                    )
+
+                    wait_time = 5 * (2 ** attempt)
+
+                    if retry_after:
+
+                        try:
+                            wait_time = int(retry_after)
+                        except ValueError:
+                            try:
+                                retry_date = parsedate_to_datetime(
+                                    retry_after
+                                )
+
+                                wait_time = max(
+                                    1,
+                                    int((
+                                        retry_date -
+                                        datetime.now(timezone.utc)
+                                    ).total_seconds())
+                                )
+                            except (ValueError, TypeError):
+                                pass
+
+                    wait_time = min(wait_time, 60)
+
+                    print(
+                        f"Limite ou falha temporária. "
+                        f"Nova tentativa em {wait_time}s..."
+                    )
+
+                    time.sleep(wait_time)
+
+                else:
+                    raise
+
+        return None
 
     def search(self):
+
+        self.reset_stats()
 
         results = []
 
@@ -200,7 +207,9 @@ class RSSCollector:
             days=self.days_limit
         )
 
-        for query in self.queries:
+        for index, query in enumerate(self.queries):
+
+            self.stats["queries"] += 1
 
             url = (
                 "https://news.google.com/rss/search?q="
@@ -210,39 +219,26 @@ class RSSCollector:
 
             try:
 
-                response = requests.get(
-                    url,
-                    timeout=20,
-                    headers={
-                        "User-Agent": "Mozilla/5.0"
-                    }
-                )
+                feed = self.get_feed(url)
 
-                response.raise_for_status()
-
-                feed = feedparser.parse(
-                    response.content
-                )
+                if feed is None:
+                    continue
 
                 if feed.bozo:
                     print(
-                        f"Aviso RSS em '{query}': "
-                        f"{feed.bozo_exception}"
+                        f"Aviso ao interpretar RSS: {query}"
                     )
-
-                if not feed.entries:
-                    print(
-                        f"Nenhum resultado para: {query}"
-                    )
-                    continue
 
                 for entry in feed.entries:
+
+                    self.stats["raw"] += 1
 
                     published = entry.get(
                         "published_parsed"
                     )
 
                     if not published:
+                        self.stats["missing_date"] += 1
                         continue
 
                     published_date = datetime(
@@ -255,30 +251,22 @@ class RSSCollector:
                         tzinfo=timezone.utc
                     )
 
-                    # Limite de três dias
                     if not cutoff_date <= published_date <= current_date:
+                        self.stats["outside_period"] += 1
                         continue
 
                     title = entry.get("title", "")
-
-                    summary = entry.get(
-                        "summary", ""
-                    )
+                    summary = entry.get("summary", "")
 
                     content = f"{title} {summary}"
 
-                    # Filtrar publicações sem relação com TI
-                    if not self.is_relevant(content):
+                    # Filtrar apenas o que não parece
+                    # relacionado a concursos públicos.
+                    if not self.is_candidate(content):
+                        self.stats["no_publication"] += 1
                         continue
 
-                    location = self.classify_location(
-                        content
-                    )
-
-                    # Descartar oportunidades claramente
-                    # direcionadas exclusivamente a outros estados
-                    if location == "Outro estado":
-                        continue
+                    self.stats["candidates"] += 1
 
                     results.append({
                         "title": title,
@@ -286,23 +274,30 @@ class RSSCollector:
                         "published": published_date.isoformat(),
                         "summary": summary,
                         "source": "Google News",
-                        "location": location,
-                        "search_query": query
+                        "location": self.classify_location(content),
+                        "search_query": query,
+                        "analysis_status": "pending"
                     })
 
             except requests.RequestException as error:
 
+                self.stats["errors"] += 1
+
                 print(
-                    f"Erro de conexão na consulta "
-                    f"'{query}': {error}"
+                    f"Erro na consulta '{query}': {error}"
                 )
 
             except Exception as error:
 
+                self.stats["errors"] += 1
+
                 print(
-                    f"Erro inesperado na consulta "
-                    f"'{query}': {error}"
+                    f"Erro inesperado em '{query}': {error}"
                 )
+
+            # Intervalo entre consultas
+            if index < len(self.queries) - 1:
+                time.sleep(self.request_interval)
 
         # Ordenar do mais recente para o mais antigo
         results.sort(
@@ -318,8 +313,13 @@ class RSSCollector:
 
             link = item["link"]
 
-            if link and link not in seen_links:
-                seen_links.add(link)
-                unique_results.append(item)
+            if not link or link in seen_links:
+                self.stats["duplicates"] += 1
+                continue
+
+            seen_links.add(link)
+            unique_results.append(item)
+
+        self.stats["final"] = len(unique_results)
 
         return unique_results
