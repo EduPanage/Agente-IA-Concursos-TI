@@ -4,6 +4,7 @@ from app.database.db import (
     initialize_database,
     get_pending_analysis,
     update_classification,
+    mark_analysis_failure,
 )
 
 
@@ -28,7 +29,6 @@ ALLOWED_RELEVANCE = {
 
 
 def validate_classification(result):
-    """Confere a estrutura da resposta antes de gravá-la no banco."""
     if not isinstance(result, dict):
         return False
 
@@ -51,20 +51,16 @@ def validate_classification(result):
 
 
 def analyze_pending(limit=20):
-    """
-    Analisa notícias pendentes usando o conteúdo da página original e PDFs.
-    Retorna um resumo da execução para que main.py possa reutilizá-lo.
-    """
     initialize_database()
 
     classifier = NewsClassifier()
     reader = PageReader()
-
     pending = get_pending_analysis(limit=limit)
 
     print(f"\nNotícias pendentes: {len(pending)}")
 
     analyzed = 0
+    needs_review = 0
     failed = 0
     extraction_errors = 0
 
@@ -72,69 +68,115 @@ def analyze_pending(limit=20):
         print("\n" + "=" * 60)
         print(f"Analisando: {news['title']}")
 
-        # Uma falha de leitura não impede a análise do título e do resumo.
         try:
             page = reader.read(news["link"])
         except Exception as error:
-            extraction_errors += 1
-            print(f"Falha inesperada na leitura da publicação: {error}")
             page = {
                 "content": "",
                 "pdf_content": "",
                 "pdf_links": [],
                 "status": "failed",
                 "source_url": None,
+                "reason": f"Erro inesperado na leitura: {error}",
             }
 
-        print(f"Leitura da publicação: {page.get('status', 'unknown')}")
+        extraction_status = page.get("status", "unknown")
+        extraction_reason = page.get("reason", "") or ""
+        content = page.get("content", "") or ""
+        pdf_content = page.get("pdf_content", "") or ""
+        has_source_text = bool(content.strip() or pdf_content.strip())
+
+        print(f"Status da extração: {extraction_status}")
+        print(f"Origem identificada: {page.get('source_url') or 'Não identificada'}")
 
         if page.get("pdf_links"):
             print(f"Editais encontrados: {len(page['pdf_links'])}")
 
+        if not has_source_text:
+            extraction_errors += 1
+            print(
+                "ATENÇÃO: sem conteúdo original. A classificação poderá "
+                "usar somente título e resumo e ficará para revisão."
+            )
+
         news_data = {
-            "title": news["title"],
+            "title": news["title"] or "",
             "summary": news["summary"] or "",
             "location": news["location"] or "",
             "source": news["source"] or "",
-            "content": page.get("content", ""),
-            "pdf_content": page.get("pdf_content", ""),
-            "extraction_status": page.get("status", "unknown"),
+            "content": content,
+            "pdf_content": pdf_content,
+            "extraction_status": extraction_status,
             "source_url": page.get("source_url"),
         }
 
-        print(f"Origem identificada: {news_data['source_url'] or 'Não identificada'}")
-
-        result = classifier.classify(news_data)
+        try:
+            result = classifier.classify(news_data)
+        except Exception as error:
+            result = None
+            print(f"Erro inesperado no classificador: {error}")
 
         if not validate_classification(result):
             failed += 1
-            print("Classificação inválida ou incompleta. Registro mantido pendente.")
+            mark_analysis_failure(
+                news["id"],
+                "Classificador indisponível ou resposta inválida. "
+                + extraction_reason,
+                extraction_status=(
+                    extraction_status if extraction_status else "unknown"
+                ),
+            )
+            print("Registro enviado para revisão; não será notificado.")
             continue
 
-        update_classification(news["id"], result)
-        analyzed += 1
+        # Uma extração sem texto nunca é considerada conclusão confiável,
+        # mesmo que a IA tenha retornado 'irrelevant'.
+        must_review = (
+            not has_source_text
+            or result["relevance"] == "needs_review"
+        )
+
+        final_status = "needs_review" if must_review else "completed"
+
+        update_classification(
+            news["id"],
+            result,
+            extraction_status=extraction_status,
+            extraction_reason=extraction_reason,
+            analysis_status=final_status,
+        )
+
+        if must_review:
+            needs_review += 1
+        else:
+            analyzed += 1
 
         print(f"Relevância: {result['relevance']}")
         print(f"Localidade: {result['location']}")
         print(f"Motivo: {result['reason']}")
+        print(f"Situação no banco: {final_status}")
 
     summary = {
         "pending": len(pending),
-        "analyzed": analyzed,
+        "completed": analyzed,
+        "needs_review": needs_review,
         "failed": failed,
         "extraction_errors": extraction_errors,
-        "remaining_in_batch": len(pending) - analyzed - failed,
     }
 
     print("\n" + "=" * 60)
     print("RESUMO DA ANÁLISE")
-    print(f"Analisadas: {summary['analyzed']}")
-    print(f"Falhas de classificação: {summary['failed']}")
-    print(f"Falhas de extração: {summary['extraction_errors']}")
-    print(f"Pendentes nesta execução: {summary['remaining_in_batch']}")
+    print(f"Concluídas: {analyzed}")
+    print(f"Para revisão: {needs_review}")
+    print(f"Falhas de classificação: {failed}")
+    print(f"Falhas de extração: {extraction_errors}")
 
     return summary
 
 
+def main():
+    analyze_pending(limit=20)
+
+
 if __name__ == "__main__":
-    analyze_pending()
+    main()
