@@ -7,6 +7,14 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "concursos.db"
 
+PRE_EDICTAL_EVENTS = (
+    "previsto",
+    "solicitado",
+    "autorizado",
+    "comissao_formada",
+    "banca_definida",
+)
+
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
@@ -64,6 +72,8 @@ def initialize_database():
             "extraction_reason": "TEXT",
             "analysis_attempts": "INTEGER NOT NULL DEFAULT 0",
             "last_analysis_at": "TEXT",
+            # Controle separado para avisos de acompanhamento pré-edital.
+            "monitoring_notified_at": "TEXT",
         }
 
         for column, definition in migrations.items():
@@ -271,6 +281,7 @@ def get_all_news():
 
 
 def get_unnotified_news():
+    """Vagas de TI já identificadas; mantém notified_at por compatibilidade."""
     with get_connection() as connection:
         return connection.execute("""
             SELECT *
@@ -288,11 +299,50 @@ def get_unnotified_news():
         """).fetchall()
 
 
+def get_unnotified_monitoring_news():
+    """
+    Concursos em fase pré-edital sem cargo de TI confirmado.
+    São avisos de acompanhamento, não oportunidades confirmadas.
+    """
+    placeholders = ",".join("?" for _ in PRE_EDICTAL_EVENTS)
+    with get_connection() as connection:
+        return connection.execute(f"""
+            SELECT *
+            FROM noticias
+            WHERE monitoring_notified_at IS NULL
+              AND is_public_competition = 1
+              AND COALESCE(has_it_opportunity, 0) = 0
+              AND relevance = 'needs_review'
+              AND (
+                    location IS NULL OR TRIM(location) = ''
+                    OR location IN ('Não identificada', 'Nao identificada', 'Localidade a verificar')
+                    OR location LIKE '%Mato Grosso do Sul%'
+                    OR location LIKE '%(MS)%'
+                    OR location LIKE '%/MS%'
+              )
+              AND event_type IN ({placeholders})
+              AND analysis_status IN ('completed', 'needs_review')
+            ORDER BY published DESC
+        """, PRE_EDICTAL_EVENTS).fetchall()
+
+
 def mark_as_notified(news_id):
+    """Marca o envio de uma oportunidade de TI confirmada."""
     with get_connection() as connection:
         connection.execute("""
             UPDATE noticias
             SET notified_at = ?
             WHERE id = ?
               AND notified_at IS NULL
+        """, (utc_now(), news_id))
+
+
+def mark_as_monitoring_notified(news_id):
+    """Marca separadamente o envio de um aviso de acompanhamento."""
+    with get_connection() as connection:
+        connection.execute("""
+            UPDATE noticias
+            SET monitoring_notified_at = ?
+            WHERE id = ?
+              AND monitoring_notified_at IS NULL
         """, (utc_now(), news_id))

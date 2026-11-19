@@ -72,8 +72,15 @@ def main():
     print(f"Em revisão: {analysis_result.get('needs_review', 0)}")
     print(f"Falhas de classificação: {analysis_result.get('failed', 0)}")
     print(f"E-mails enviados: {notification_result.get('sent', 0)}")
-    print(f"Notícias notificadas: {notification_result.get('notified', 0)}")
-    print("\\nExecução finalizada.")
+    print(
+        "Vagas de TI notificadas: "
+        f"{notification_result.get('opportunities_notified', 0)}"
+    )
+    print(
+        "Avisos pré-edital enviados: "
+        f"{notification_result.get('monitoring_notified', 0)}"
+    )
+    print("\nExecução finalizada.")
 
 
 if __name__ == "__main__":
