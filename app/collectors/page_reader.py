@@ -48,7 +48,7 @@ class PageReader:
         self.timeout = (10, 30)
         self.max_content_size = 10 * 1024 * 1024
         self.max_text_length = 15000
-        self.max_pdf_links = 2
+        self.max_pdf_links = 5
         self.google_request_delay = 1.0
         self._last_google_request = 0.0
 
