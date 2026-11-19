@@ -34,7 +34,7 @@ class NewsClassifier:
             "Ceará (CE)",
         ),
         (
-            r"\b(?:TJRJ|TJ\s*[-/]?\s*RJ|UFRJ|IFRJ|PGE\s*[-/]?\s*RJ)\b|\bRio de Janeiro\b",
+            r"\b(?:TJRJ|TJ\s*[-/]?\s*RJ|UFRJ|IFRJ|PGE\s*[-/]?\s*RJ)\b",
             "Rio de Janeiro (RJ)",
         ),
         (
@@ -47,13 +47,20 @@ class NewsClassifier:
         ),
     )
 
+    NATIONAL_MARKERS = (
+        r"\b(?:INB|Ind[uú]strias? Nucleares? do Brasil|ANPD|"
+        r"Ag[eê]ncia Nacional de Prote[cç][aã]o de Dados|"
+        r"concurso nacional|sele[cç][aã]o nacional|"
+        r"concurso federal|sele[cç][aã]o federal)\b",
+    )
+
     EVENT_MARKERS = (
         (
             r"\bcomiss[aã]o\s+(?:organizadora\s+)?formada\b",
             "comissao_formada",
         ),
         (
-            r"\bbanca\s+(?:organizadora\s+)?definida\b|\bcontrato\s+com\s+a\s+banca\b",
+            r"\bbanca\s+(?:organizadora\s+)?(?:foi\s+)?definida\b|\bcontrato\s+com\s+a\s+banca\b|\b(?:Cebraspe|FGV|FCC|Instituto\s+AOCP)\s+(?:ser[aá]\s+)?banca\b",
             "banca_definida",
         ),
         (
@@ -116,8 +123,6 @@ class NewsClassifier:
         r"\b(?:analista|t[eé]cnico|especialista|gestor)\s+(?:de|em)\s+"
         r"seguran[cç]a\s+da\s+informa[cç][aã]o\b",
 
-        r"\bseguran[cç]a\s+da\s+informa[cç][aã]o\b",
-
         r"\bsuporte\s+(?:t[eé]cnico\s+)?(?:de\s+)?(?:ti|inform[aá]tica)\b",
 
         r"\btecnologia\s+da\s+informa[cç][aã]o\s*[-–:]\s*(?:analista|t[eé]cnico|cargo|vaga)",
@@ -168,6 +173,13 @@ class NewsClassifier:
                 return event
 
         return None
+
+    @classmethod
+    def _is_national(cls, text):
+        return any(
+            re.search(pattern, text, flags=re.IGNORECASE)
+            for pattern in cls.NATIONAL_MARKERS
+        )
 
     @classmethod
     def _find_it_role(cls, text, title=""):
@@ -329,7 +341,9 @@ other_state, needs_review, irrelevant.
             pdf_content,
         ))
 
-        state, marker = self._detect_state(combined)
+        headline_text = "\n".join((title, summary))
+        national_scope = self._is_national(headline_text)
+        state, marker = self._detect_state(headline_text)
 
         if state and (result.get("location") or "").strip().lower() in {
             "",
@@ -341,7 +355,12 @@ other_state, needs_review, irrelevant.
                 f"Instituição identificada em {state}; lotação a confirmar"
             )
 
-        detected_event = self._detect_event(combined)
+        detected_event = (
+            self._detect_event(title)
+            or self._detect_event(summary)
+            or self._detect_event(content)
+            or self._detect_event(pdf_content)
+        )
 
         if detected_event:
             result["event_type"] = detected_event
@@ -354,7 +373,7 @@ other_state, needs_review, irrelevant.
         teaching_only = bool(
             re.search(
                 teaching_pattern,
-                combined,
+                title + "\n" + summary,
                 flags=re.IGNORECASE,
             )
         )
@@ -375,7 +394,7 @@ other_state, needs_review, irrelevant.
             result["location"] = state
 
         explicit_competition = re.search(
-            r"\bconcurso\s+p[uú]blico\b|\bprocesso\s+seletivo\b|"
+            r"\bconcurso\b|\bprocesso\s+seletivo\b|"
             r"\bcomiss[aã]o\s+(?:organizadora\s+)?formada\b|"
             r"\bbanca\s+(?:organizadora\s+)?definida\b|"
             r"\bedital\s+(?:publicado|lan[cç]ado)\b",
@@ -441,7 +460,15 @@ other_state, needs_review, irrelevant.
 
         if result["has_it_opportunity"]:
 
-            if state and state != "Mato Grosso do Sul (MS)":
+            if national_scope:
+                result["relevance"] = "national_unknown"
+                result["location"] = "Nacional - lotação a confirmar"
+                result["reason"] = (
+                    "Oportunidade profissional de TI identificada em seleção "
+                    "de abrangência nacional/federal; lotação a confirmar."
+                )
+
+            elif state and state != "Mato Grosso do Sul (MS)":
                 result["relevance"] = "other_state"
                 result["location"] = state
                 result["reason"] = (
@@ -501,6 +528,16 @@ other_state, needs_review, irrelevant.
                         "O cargo de TI foi identificado, mas o conteúdo da "
                         "publicação não comprova lotação em Mato Grosso do Sul."
                     )
+
+        if national_scope and not result["has_it_opportunity"]:
+            if result.get("event_type") in self.PRE_EDICTAL_EVENTS:
+                result["is_public_competition"] = True
+                result["relevance"] = "needs_review"
+                result["location"] = "Nacional"
+                result["reason"] = (
+                    "Seleção nacional/federal em preparação, mas ainda sem "
+                    "cargo profissional de TI confirmado."
+                )
 
         return result
 

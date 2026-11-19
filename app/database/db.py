@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -20,11 +21,21 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
+@contextmanager
 def get_connection():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
-    return connection
+
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def initialize_database():

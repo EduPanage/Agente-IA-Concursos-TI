@@ -290,5 +290,66 @@ class TestNewsClassifierRules(unittest.TestCase):
         self.assertTrue(result["has_it_opportunity"])
 
 
+    def test_concurso_ifg_e_reconhecido_sem_publico(self):
+        news = {
+            "title": "Concurso IFG: vagas para Técnico de Tecnologia da Informação",
+            "summary": "Seleção para cargos efetivos.",
+            "content": "Cargo: Técnico de Tecnologia da Informação.",
+            "extraction_status": "success",
+        }
+        result = self.classifier._apply_rules(self.result_base(), news)
+        self.assertTrue(result["is_public_competition"])
+        self.assertTrue(result["has_it_opportunity"])
+        self.assertEqual(result["relevance"], "other_state")
+        self.assertEqual(result["location"], "Goiás (GO)")
+
+    def test_inb_nacional_nao_vira_rio_de_janeiro(self):
+        news = {
+            "title": "Concurso INB 2026: oportunidades para Analista de Sistemas",
+            "summary": "Seleção de abrangência nacional.",
+            "content": "Cargo: Analista de Sistemas. Unidade no Rio de Janeiro.",
+            "extraction_status": "success",
+        }
+        result = self.classifier._apply_rules(self.result_base(), news)
+        self.assertTrue(result["is_public_competition"])
+        self.assertTrue(result["has_it_opportunity"])
+        self.assertEqual(result["relevance"], "national_unknown")
+        self.assertIn("Nacional", result["location"])
+
+    def test_anpd_banca_definida_sem_cargo_ti_fica_em_revisao(self):
+        news = {
+            "title": "Concurso ANPD: banca Cebraspe será banca",
+            "summary": "Edital previsto para dezembro.",
+            "content": "Atuação com privacidade e segurança da informação.",
+            "extraction_status": "success",
+        }
+        result = self.classifier._apply_rules(self.result_base(), news)
+        self.assertTrue(result["is_public_competition"])
+        self.assertFalse(result["has_it_opportunity"])
+        self.assertEqual(result["event_type"], "banca_definida")
+        self.assertEqual(result["relevance"], "needs_review")
+
+    def test_mencao_a_rio_no_corpo_nao_define_estado(self):
+        news = {
+            "title": "Concurso nacional para Analista de Sistemas",
+            "summary": "Seleção federal.",
+            "content": "Cargo: Analista de Sistemas. Sede no Rio de Janeiro.",
+            "extraction_status": "success",
+        }
+        result = self.classifier._apply_rules(self.result_base(), news)
+        self.assertTrue(result["has_it_opportunity"])
+        self.assertNotEqual(result["relevance"], "other_state")
+
+    def test_mencao_a_professor_no_corpo_nao_anula_vaga_de_ti(self):
+        news = {
+            "title": "Concurso para Analista de Tecnologia da Informação",
+            "summary": "Edital com cargos de diferentes áreas.",
+            "content": "Cargo: Analista de Tecnologia da Informação. Também haverá professores.",
+            "extraction_status": "success",
+        }
+        result = self.classifier._apply_rules(self.result_base(), news)
+        self.assertTrue(result["has_it_opportunity"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

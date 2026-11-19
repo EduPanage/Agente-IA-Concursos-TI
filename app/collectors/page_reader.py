@@ -631,17 +631,17 @@ class PageReader:
             return result
 
         article_text = self.extract_html(content)
+        pdf_links = self.find_pdf_links(content, final_url)
+
+        result["source_url"] = final_url
+        result["pdf_links"] = pdf_links
+        result["resolution_status"] = (
+            "resolved" if was_google_link else "direct"
+        )
+
         if len(article_text.strip()) > 100:
-            result.update({
-                "source_url": final_url,
-                "content": article_text[:self.max_text_length],
-                "pdf_links": self.find_pdf_links(content, final_url),
-                "resolution_status": (
-                    "resolved" if was_google_link else "direct"
-                ),
-            })
+            result["content"] = article_text[:self.max_text_length]
         else:
-            result["source_url"] = final_url
             result["reason"] = (
                 "A página foi acessada, mas não apresentou texto suficiente."
             )
@@ -660,12 +660,21 @@ class PageReader:
         has_html = bool(result["content"].strip())
         has_pdf = bool(result["pdf_content"].strip())
 
-        if has_html and has_pdf:
+        if has_html and (has_pdf or not result["pdf_links"]):
+            # Texto do artigo é suficiente quando a página não oferece PDFs.
             result["status"] = "success"
             result["reason"] = ""
         elif has_html or has_pdf:
+            # Há conteúdo parcial quando um dos materiais disponíveis não
+            # pôde ser extraído (por exemplo, edital em PDF vinculado).
             result["status"] = "partial"
-            result["reason"] = ""
+            result["reason"] = (
+                "Texto principal extraído, mas nem todo o material vinculado "
+                "pôde ser obtido."
+                if has_html else
+                "Conteúdo de PDF extraído, mas o texto principal da página "
+                "não foi obtido."
+            )
         else:
             result["status"] = "empty"
             if not result["reason"]:
