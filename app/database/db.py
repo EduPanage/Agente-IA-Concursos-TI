@@ -324,10 +324,11 @@ def get_unnotified_monitoring_news():
               AND is_public_competition = 1
               AND COALESCE(has_it_opportunity, 0) = 0
               AND relevance = 'needs_review'
+              -- Avisos pré-edital somente quando a localidade em MS
+              -- estiver explicitamente identificada. Localidade vazia ou
+              -- desconhecida não é suficiente para incluir um concurso.
               AND (
-                    location IS NULL OR TRIM(location) = ''
-                    OR location IN ('Não identificada', 'Nao identificada', 'Localidade a verificar')
-                    OR location LIKE '%Mato Grosso do Sul%'
+                    location LIKE '%Mato Grosso do Sul%'
                     OR location LIKE '%(MS)%'
                     OR location LIKE '%/MS%'
               )
