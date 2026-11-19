@@ -78,7 +78,7 @@ def initialize_database():
             WHERE analysis_status IS NULL OR TRIM(analysis_status) = ''
         """)
 
-    print("Banco de dados inicializado com sucesso!")
+    print("\nBanco de dados inicializado com sucesso!")
 
 
 def save_news(news_list):

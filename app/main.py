@@ -1,117 +1,79 @@
-
 from app.collectors.rss_collector import RSSCollector
+from app.collectors.official_collector import OfficialCollector
+from app.database.db import initialize_database, save_news
+from app.ai.analyze_pending import analyze_pending
+from app.notifications.gmail_notifier import send_pending_notifications
 
-from app.database.db import (
-    initialize_database,
-    save_news,
-    get_pending_analysis,
-    update_classification
-)
 
-from app.ai.classifier import NewsClassifier
+def collect_from_rss():
+    print("\n[1/4] COLETA RSS")
+    collector = RSSCollector()
+    try:
+        results = collector.search()
+        print(f"Publicações RSS encontradas: {len(results)}")
+        for key, value in collector.stats.items():
+            print(f"{key}: {value}")
+        return results
+    except Exception as error:
+        print(f"Falha na coleta RSS: {error}")
+        return []
+
+
+def collect_from_official_sources():
+    print("\n[2/4] FONTES OFICIAIS")
+    collector = OfficialCollector()
+    try:
+        results = collector.search()
+        print(f"Publicações oficiais encontradas: {len(results)}")
+        for key, value in collector.stats.items():
+            print(f"{key}: {value}")
+        return results
+    except Exception as error:
+        print(f"Falha na coleta de fontes oficiais: {error}")
+        return []
 
 
 def main():
+    print("\n" + "=" * 65)
+    print("AGENTE DE CONCURSOS DE TI - DOURADOS/MS")
+    print("=" * 65)
 
-    print("\n\n")
-    print("=" * 55)
-    print("AGENTE DE CONCURSOS TI - DOURADOS/MS")
-    print("=" * 55)
-    print("\n")
-
-    # Inicializar banco
     initialize_database()
 
-    # Executar pesquisas
-    collector = RSSCollector()
+    rss_results = collect_from_rss()
+    official_results = collect_from_official_sources()
 
-    print("\nIniciando pesquisas...")
+    print("\n[3/4] SALVANDO PUBLICAÇÕES")
+    unique_news = {}
+    for item in rss_results + official_results:
+        link = item.get("link")
+        if link:
+            unique_news.setdefault(link, item)
 
-    results = collector.search()
+    consolidated = list(unique_news.values())
+    db_result = save_news(consolidated)
+    print(f"Publicações consolidadas: {len(consolidated)}")
+    print(f"Novas notícias: {db_result['inserted']}")
+    print(f"Notícias atualizadas: {db_result['updated']}")
 
-    # Salvar notícias
-    database_result = save_news(results)
+    print("\n[4/4] ANÁLISE DE NOTÍCIAS")
+    analysis_result = analyze_pending(limit=20)
 
-    print(f"\nPublicações encontradas: {len(results)}")
-    print(f"Novas notícias: {database_result['inserted']}")
-    print(f"Notícias atualizadas: {database_result['updated']}")
+    print("\nNOTIFICAÇÕES")
+    notification_result = send_pending_notifications()
 
-    # Diagnóstico
-    print("\nDIAGNÓSTICO DA PESQUISA")
-    print("-" * 55)
-
-    for key, value in collector.stats.items():
-        print(f"{key}: {value}")
-
-    # Inicializar IA
-    classifier = NewsClassifier()
-
-    # Buscar notícias pendentes
-    pending_news = get_pending_analysis(limit=20)
-
-    print("\nANÁLISE COM INTELIGÊNCIA ARTIFICIAL")
-    print("-" * 55)
-
-    print(f"Notícias pendentes: {len(pending_news)}")
-
-    analyzed = 0
-    failed = 0
-
-    for news in pending_news:
-
-        print(f"\nAnalisando: {news['title']}")
-
-        news_data = {
-            "title": news["title"],
-            "summary": news["summary"],
-            "location": news["location"],
-            "source": news["source"]
-        }
-
-        result = classifier.classify(news_data)
-
-        if not result:
-            failed += 1
-            continue
-
-        required_fields = [
-            "is_public_competition",
-            "has_it_opportunity",
-            "location",
-            "relevance",
-            "event_type",
-            "reason",
-            "evidence"
-        ]
-
-        if not all(field in result for field in required_fields):
-            print("Resposta incompleta da IA. Registro mantido pendente.")
-            failed += 1
-            continue
-
-        if not isinstance(result["is_public_competition"], bool):
-            failed += 1
-            continue
-
-        if not isinstance(result["has_it_opportunity"], bool):
-            failed += 1
-            continue
-
-        update_classification(news["id"], result)
-
-        analyzed += 1
-
-        print(f"Relevância: {result['relevance']}")
-        print(f"Motivo: {result['reason']}")
-
-    print("\nRESUMO DA EXECUÇÃO")
-    print("-" * 55)
-
-    print(f"Notícias analisadas: {analyzed}")
-    print(f"Falhas de análise: {failed}")
-    print(f"Notícias ainda pendentes: {len(pending_news) - analyzed - failed}")
-
-    print("\nExecução finalizada!")
+    print("\n" + "=" * 65)
+    print("RESUMO FINAL")
+    print("=" * 65)
+    print(f"Coleta RSS: {len(rss_results)}")
+    print(f"Coleta oficial: {len(official_results)}")
+    print(f"Novos registros: {db_result['inserted']}")
+    print(f"Análise concluída: {analysis_result.get('completed', 0)}")
+    print(f"Em revisão: {analysis_result.get('needs_review', 0)}")
+    print(f"Falhas de classificação: {analysis_result.get('failed', 0)}")
+    print(f"E-mails enviados: {notification_result.get('sent', 0)}")
+    print(f"Notícias notificadas: {notification_result.get('notified', 0)}")
+    print("\\nExecução finalizada.")
 
 
 if __name__ == "__main__":
